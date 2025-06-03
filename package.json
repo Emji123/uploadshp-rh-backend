@@ -1,0 +1,26 @@
+{
+  "name": "uploadshp-rh-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Emji123/uploadshp-rh-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Emji123/uploadshp-rh-backend/issues"
+  },
+  "homepage": "https://github.com/Emji123/uploadshp-rh-backend#readme",
+  "description": "",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0"
+  }
+}
