@@ -23,10 +23,24 @@ app.use((req, res, next) => {
   next();
 });
 
+const validBpdas = [
+  'krueng_aceh', 'wampu_sei_ular', 'asahan_barumun', 'agam_kuantan',
+  'indragiri_rokan', 'batanghari', 'ketahun', 'musi', 'baturusa_cerucuk',
+  'sei_jang_duriangkang', 'way_seputih_sekampung', 'citarum_ciliwung',
+  'cimanuk_citanduy', 'pemali_jratun', 'solo', 'serayu_opak_progo',
+  'brantas_sampean', 'kapuas', 'kahayan', 'barito', 'mahakam_berau',
+  'tondano', 'bone_limboto', 'palu_poso', 'karama', 'jeneberang_saddang',
+  'konaweha', 'unda_anyar', 'dodokan_moyosari', 'benain_noelmina',
+  'waehapu_batu_merah', 'ake_malamo', 'remu_ransiki', 'memberamo'
+];
+
+const validYears = Array.from({ length: 2026 - 2019 + 1 }, (_, i) => (2019 + i).toString());
+
 app.post('/validate-shapefile', async (req, res) => {
   const { zip_path, bucket } = req.body;
   console.log('Menerima request validasi:', { zip_path, bucket });
 
+  // Validasi parameter dasar
   if (!zip_path || !bucket) {
     console.error('Parameter hilang:', { zip_path, bucket });
     return res.status(400).json({ error: 'zip_path dan bucket wajib diisi!' });
@@ -38,40 +52,57 @@ app.post('/validate-shapefile', async (req, res) => {
     return res.status(400).json({ error: `Bucket tidak valid! Harus salah satu dari: ${validBuckets.join(', ')}.` });
   }
 
-  if (!zip_path.startsWith('shapefiles/') || !zip_path.toLowerCase().endsWith('.zip')) {
+  // Validasi format zip_path: shapefiles/{bpdas}/{tahun}/{nama_file}.zip
+  const pathRegex = /^shapefiles\/([a-z_]+)\/([0-9]{4})\/(.+\.zip)$/i;
+  const match = zip_path.match(pathRegex);
+  if (!match) {
     console.error('Format zip_path tidak valid:', zip_path);
-    return res.status(400).json({ error: 'zip_path harus dalam format shapefiles/<nama_file>.zip' });
+    return res.status(400).json({
+      error: 'zip_path harus dalam format shapefiles/{bpdas}/{tahun}/{nama_file}.zip'
+    });
+  }
+
+  const [, bpdas, year, fileName] = match;
+
+  // Validasi BPDAS
+  if (!validBpdas.includes(bpdas)) {
+    console.error('BPDAS tidak valid:', bpdas);
+    return res.status(400).json({
+      error: `BPDAS tidak valid! Harus salah satu dari: ${validBpdas.join(', ')}.`
+    });
+  }
+
+  // Validasi Tahun
+  if (!validYears.includes(year)) {
+    console.error('Tahun tidak valid:', year);
+    return res.status(400).json({
+      error: 'Tahun harus antara 2019 dan 2026.'
+    });
   }
 
   try {
-    const fileName = zip_path.split('/').pop();
     console.log('Mencari file:', { fileName, bucket, path: zip_path });
 
-    const { data: shapefiles, error: shapefileError } = await supabase.storage
+    // Mencari file di folder shapefiles/{bpdas}/{tahun}/
+    const folderPath = `shapefiles/${bpdas}/${year}`;
+    const { data: files, error: listError } = await supabase.storage
       .from(bucket)
-      .list('shapefiles', { limit: 100, offset: 0 });
+      .list(folderPath, { limit: 100, offset: 0 });
 
-    if (shapefileError) {
-      console.error('Error mengakses shapefiles:', shapefileError);
-      return res.status(500).json({ error: 'Gagal mengakses bucket: ' + shapefileError.message });
+    if (listError) {
+      console.error(`Error mengakses folder ${folderPath} di bucket ${bucket}:`, listError);
+      return res.status(500).json({
+        error: `Gagal mengakses folder ${folderPath} di bucket ${bucket}: ${listError.message}`
+      });
     }
 
-    console.log('Isi folder shapefiles:', shapefiles ? shapefiles.map(f => f.name) : 'Kosong');
-    const fileExists = shapefiles.some(file => file.name === fileName);
+    console.log(`Isi folder ${folderPath}:`, files ? files.map(f => f.name) : 'Kosong');
+    const fileExists = files.some(file => file.name === fileName);
 
     if (!fileExists) {
-      const { data: rootData, error: rootError } = await supabase.storage
-        .from(bucket)
-        .list('', { limit: 100, offset: 0 });
-
-      if (rootError) {
-        console.error('Error mengakses root bucket:', rootError);
-      }
-
-      console.log('Isi root bucket:', rootData ? rootData.map(f => f.name) : 'Kosong');
       return res.status(404).json({
-        error: `File ${fileName} tidak ditemukan di bucket ${bucket}/shapefiles`,
-        rootContents: rootData ? rootData.map(f => f.name) : []
+        error: `File ${fileName} tidak ditemukan di ${folderPath} pada bucket ${bucket}`,
+        folderContents: files ? files.map(f => f.name) : []
       });
     }
 
