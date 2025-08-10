@@ -1,131 +1,224 @@
-require('dotenv').config();
 const express = require('express');
+const { createClient } = require('webdav');
+const JSZip = require('jszip');
+const { openDbf } = require('shapefile');
 const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
+const multer = require('multer');
 const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors({
-  origin: ['https://uploadshp-rh.netlify.app', 'http://localhost:3000'],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type'],
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
+// Konfigurasi WebDAV untuk NAS Synology
+const webdavClient = createClient(
+  'https://ditrh.synology.me:5006/shapefiles', // Ganti dengan URL WebDAV Synology Anda
+  {
+    username: 'webdav', // Ganti dengan username WebDAV
+    password: 'Lantai1213' // Ganti dengan password WebDAV
+  }
 );
 
-app.use((req, res, next) => {
-  const timestamp = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-  console.log(`[${timestamp}] ${req.method} ${req.url} - Body:`, req.body);
-  next();
-});
+const requiredFieldsMap = {
+  'RHL Vegetatif': [
+    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'PROV', 'KAB', 'KEC', 'DESA',
+    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI', 'ARAHAN',
+    'POLA', 'BTG_HA', 'THN_TNM', 'JENIS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
+    'NO_KNTRK', 'NILAI_KNTR'
+  ],
+  'RHL UPSA': [
+    'ID', 'BPDAS', 'UR_BPDAS', 'WADMPR', 'WADMKK', 'WADMKC', 'DESA',
+    'KELOMPOK', 'THN_BUAT', 'LUAS_HA', 'JENIS_TNM', 'BTG_TOTAL', 'BTG_HA',
+    'SPL_TEKNIS', 'FUNGSI_KWS', 'KET'
+  ],
+  'RHL FOLU': [
+    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'PROV', 'KAB', 'KEC', 'DESA',
+    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI', 'ARAHAN',
+    'POLA', 'BTG_HA', 'THN_TNM', 'JENIS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
+    'NO_KNTRK', 'NILAI_KNTR'
+  ]
+};
 
-const validBpdas = [
-  'krueng_aceh', 'wampu_sei_ular', 'asahan_barumun', 'agam_kuantan',
-  'indragiri_rokan', 'batanghari', 'ketahun', 'musi', 'baturusa_cerucuk',
-  'sei_jang_duriangkang', 'way_seputih_sekampung', 'citarum_ciliwung',
-  'cimanuk_citanduy', 'pemali_jratun', 'solo', 'serayu_opak_progo',
-  'brantas_sampean', 'kapuas', 'kahayan', 'barito', 'mahakam_berau',
-  'tondano', 'bone_limboto', 'palu_poso', 'karama', 'jeneberang_saddang',
-  'konaweha', 'unda_anyar', 'dodokan_moyosari', 'benain_noelmina',
-  'waehapu_batu_merah', 'ake_malamo', 'remu_ransiki', 'memberamo'
-];
+const bucketMap = {
+  'RHL Vegetatif': 'rhlvegetatif',
+  'RHL UPSA': 'rhlupsa',
+  'RHL FOLU': 'rhlfolu'
+};
 
-const validYears = Array.from({ length: 2026 - 2019 + 1 }, (_, i) => (2019 + i).toString());
-
-app.post('/validate-shapefile', async (req, res) => {
-  const { zip_path, bucket } = req.body;
-  console.log('Menerima request validasi:', { zip_path, bucket });
-
-  // Validasi parameter dasar
-  if (!zip_path || !bucket) {
-    console.error('Parameter hilang:', { zip_path, bucket });
-    return res.status(400).json({ error: 'zip_path dan bucket wajib diisi!' });
-  }
-
-  const validBuckets = ['rhlvegetatif', 'rhlupsa', 'rhlfolu'];
-  if (!validBuckets.includes(bucket)) {
-    console.error('Bucket tidak valid:', bucket);
-    return res.status(400).json({ error: `Bucket tidak valid! Harus salah satu dari: ${validBuckets.join(', ')}.` });
-  }
-
-  // Validasi format zip_path: shapefiles/{bpdas}/{tahun}/{nama_file}.zip
-  const pathRegex = /^shapefiles\/([a-z_]+)\/([0-9]{4})\/(.+\.zip)$/i;
-  const match = zip_path.match(pathRegex);
-  if (!match) {
-    console.error('Format zip_path tidak valid:', zip_path);
-    return res.status(400).json({
-      error: 'zip_path harus dalam format shapefiles/{bpdas}/{tahun}/{nama_file}.zip'
-    });
-  }
-
-  const [, bpdas, year, fileName] = match;
-
-  // Validasi BPDAS
-  if (!validBpdas.includes(bpdas)) {
-    console.error('BPDAS tidak valid:', bpdas);
-    return res.status(400).json({
-      error: `BPDAS tidak valid! Harus salah satu dari: ${validBpdas.join(', ')}.`
-    });
-  }
-
-  // Validasi Tahun
-  if (!validYears.includes(year)) {
-    console.error('Tahun tidak valid:', year);
-    return res.status(400).json({
-      error: 'Tahun harus antara 2019 dan 2026.'
-    });
-  }
-
+async function validateZip(zipBuffer, activity) {
   try {
-    console.log('Mencari file:', { fileName, bucket, path: zip_path });
+    console.log(`Validasi ZIP (${activity})`);
+    const zip = new JSZip();
+    const content = await zip.loadAsync(zipBuffer);
+    const files = Object.keys(content.files);
+    console.log('File di ZIP:', files);
 
-    // Mencari file di folder shapefiles/{bpdas}/{tahun}/
-    const folderPath = `shapefiles/${bpdas}/${year}`;
-    const { data: files, error: listError } = await supabase.storage
-      .from(bucket)
-      .list(folderPath, { limit: 100, offset: 0 });
-
-    if (listError) {
-      console.error(`Error mengakses folder ${folderPath} di bucket ${bucket}:`, listError);
-      return res.status(500).json({
-        error: `Gagal mengakses folder ${folderPath} di bucket ${bucket}: ${listError.message}`
-      });
+    const shpFiles = files.filter(name => name.toLowerCase().endsWith('.shp'));
+    if (shpFiles.length === 0) {
+      return { valid: false, error: 'File ZIP harus berisi setidaknya satu file .shp.' };
     }
 
-    console.log(`Isi folder ${folderPath}:`, files ? files.map(f => f.name) : 'Kosong');
-    const fileExists = files.some(file => file.name === fileName);
+    const successMessages = [];
+    const errorMessages = [];
+    let shapefileIndex = 0;
+    let validShapefileCount = 0;
 
-    if (!fileExists) {
-      return res.status(404).json({
-        error: `File ${fileName} tidak ditemukan di ${folderPath} pada bucket ${bucket}`,
-        folderContents: files ? files.map(f => f.name) : []
-      });
+    for (const shpFile of shpFiles) {
+      shapefileIndex++;
+      const baseName = shpFile.substring(0, shpFile.length - 4).toLowerCase();
+      console.log('Memvalidasi shapefile:', baseName);
+
+      const shxFile = files.find(name => name.toLowerCase() === `${baseName}.shx`);
+      const dbfFile = files.find(name => name.toLowerCase() === `${baseName}.dbf`);
+
+      if (!shxFile || !dbfFile) {
+        errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} belum lengkap:\n    - Harus memiliki .shp, .shx, dan .dbf`);
+        continue;
+      }
+
+      const dbfContent = await content.file(dbfFile).async('arraybuffer');
+      const source = await openDbf(dbfContent);
+      console.log('Membuka .dbf:', dbfFile);
+
+      let missingFields = new Set();
+      let emptyFieldsMap = new Map();
+      let invalidLuasHA = [];
+      let featureCount = 0;
+
+      let result;
+      do {
+        result = await source.read();
+        console.log('Fitur:', result);
+        if (result.done) break;
+
+        featureCount++;
+        const feature = result.value;
+        if (!feature) {
+          errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Baris ke-${featureCount} tidak valid`);
+          break;
+        }
+
+        const properties = feature.properties || feature;
+        if (!properties || typeof properties !== 'object') {
+          errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Baris ke-${featureCount} tidak memiliki properti valid`);
+          break;
+        }
+        console.log('Properti fitur:', properties);
+
+        for (const field of requiredFieldsMap[activity]) {
+          if (!(field in properties)) {
+            missingFields.add(field);
+          } else {
+            const value = properties[field];
+            if (value === null || value === '') {
+              if (!emptyFieldsMap.has(field)) {
+                emptyFieldsMap.set(field, []);
+              }
+              emptyFieldsMap.get(field).push(featureCount);
+            }
+          }
+        }
+
+        if ('LUAS_HA' in properties) {
+          const value = properties.LUAS_HA;
+          if (value !== null && value !== '') {
+            const numericValue = parseFloat(value);
+            if (isNaN(numericValue)) {
+              invalidLuasHA.push(`Baris ke-${featureCount}: LUAS_HA harus numerik`);
+            } else {
+              const decimalPart = numericValue % 1;
+              if (decimalPart > 0.5) {
+                invalidLuasHA.push(`Baris ke-${featureCount}: LUAS_HA desimal lebih dari 0.5`);
+              }
+            }
+          }
+        }
+      } while (!result.done);
+
+      if (featureCount === 0) {
+        errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Tidak memiliki data`);
+        continue;
+      }
+
+      let shapefileErrors = [];
+      if (missingFields.size > 0 || emptyFieldsMap.size > 0 || invalidLuasHA.length > 0) {
+        shapefileErrors.push(`${shapefileIndex}. Shapefile ${baseName} belum lengkap:`);
+        if (missingFields.size > 0) {
+          shapefileErrors.push(`    a. Field yang belum ada:`);
+          Array.from(missingFields).forEach(field => {
+            shapefileErrors.push(`         - ${field}`);
+          });
+        }
+        if (emptyFieldsMap.size > 0) {
+          shapefileErrors.push(`    b. Field yang kosong:`);
+          emptyFieldsMap.forEach((rows, field) => {
+            shapefileErrors.push(`         - ${field}, pada baris: ${rows.join(', ')}`);
+          });
+        }
+        if (invalidLuasHA.length > 0) {
+          shapefileErrors.push(`    c. Kesalahan pada LUAS_HA:`);
+          invalidLuasHA.forEach(error => {
+            shapefileErrors.push(`         - ${error}`);
+          });
+        }
+        errorMessages.push(shapefileErrors.join('\n'));
+      } else {
+        successMessages.push(`${shapefileIndex}. Shapefile ${baseName} sudah lengkap`);
+        validShapefileCount++;
+      }
     }
 
-    res.status(200).json({
-      message: 'Validasi berhasil',
-      fileName,
-      bucket,
-      path: zip_path
-    });
-  } catch (error) {
-    console.error('Error processing request:', error);
-    res.status(500).json({
-      error: 'Gagal memproses validasi',
-      details: error.message
-    });
+    if (validShapefileCount === shpFiles.length) {
+      return { valid: true, success: 'Data sudah valid dan selesai diunggah' };
+    } else {
+      let combinedMessage = [];
+      if (successMessages.length > 0) {
+        combinedMessage.push(successMessages.join('\n'));
+      }
+      if (errorMessages.length > 0) {
+        combinedMessage.push(errorMessages.join('\n'));
+      }
+      combinedMessage.push('Harap perbaiki shapefile dan upload ulang');
+      return { valid: false, error: combinedMessage.join('\n') };
+    }
+  } catch (err) {
+    console.error(`Error validasi ZIP (${activity}):`, err);
+    return { valid: false, error: `Gagal memvalidasi ZIP: ${err.message}\nHarap perbaiki shapefile dan upload ulang` };
+  }
+}
+
+app.post('/validate-shapefile', upload.single('file'), async (req, res) => {
+  try {
+    const { bpdas, year, activity } = req.body;
+    const file = req.file;
+
+    if (!file || !bpdas || !year || !activity) {
+      return res.status(400).json({ error: 'Semua field harus diisi dan file harus diunggah' });
+    }
+
+    const validation = await validateZip(file.buffer, activity);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+    const dateString = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '_').toUpperCase();
+    const timeString = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/[:.]/g, '');
+    const fileNameWithDate = `${dateString}_${timeString}_${file.originalname}`;
+    const filePath = `${bucketMap[activity]}/${bpdas}/${year}/${fileNameWithDate}`;
+
+    // Unggah file ke NAS Synology menggunakan WebDAV
+    await webdavClient.putFileContents(filePath, file.buffer, { overwrite: true });
+    console.log(`File diunggah ke Synology: ${filePath}`);
+
+    res.status(200).json({ message: 'Validasi berhasil dan file diunggah ke NAS Synology' });
+  } catch (err) {
+    console.error('Error:', err);
+    res.status(500).json({ error: `Gagal memproses shapefile: ${err.message}` });
   }
 });
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-const port = process.env.PORT || 3001;
-app.listen(port, () => {
-  console.log(`Server berjalan di port ${port}`);
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`Server berjalan di port ${PORT}`);
 });
