@@ -12,10 +12,10 @@ app.use(express.json());
 
 // Konfigurasi WebDAV untuk NAS Synology
 const webdavClient = createClient(
-  'https://ditrh.synology.me:5006/shapefiles', // Ganti dengan URL WebDAV Synology Anda
+  process.env.WEBDAV_URL || 'https://ditrh.synology.me:5006/shapefiles',
   {
-    username: 'webdav', // Ganti dengan username WebDAV
-    password: 'Lantai1213' // Ganti dengan password WebDAV
+    username: process.env.WEBDAV_USERNAME || 'webdav',
+    password: process.env.WEBDAV_PASSWORD || 'Lantai1213'
   }
 );
 
@@ -37,12 +37,6 @@ const requiredFieldsMap = {
     'POLA', 'BTG_HA', 'THN_TNM', 'JENIS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
     'NO_KNTRK', 'NILAI_KNTR'
   ]
-};
-
-const bucketMap = {
-  'RHL Vegetatif': 'rhlvegetatif',
-  'RHL UPSA': 'rhlupsa',
-  'RHL FOLU': 'rhlfolu'
 };
 
 async function validateZip(zipBuffer, activity) {
@@ -205,15 +199,30 @@ app.post('/validate-shapefile', upload.single('file'), async (req, res) => {
     const dateString = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '_').toUpperCase();
     const timeString = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/[:.]/g, '');
     const fileNameWithDate = `${dateString}_${timeString}_${file.originalname}`;
+    const bucketMap = {
+      'RHL Vegetatif': 'rhlvegetatif',
+      'RHL UPSA': 'rhlupsa',
+      'RHL FOLU': 'rhlfolu'
+    };
     const filePath = `${bucketMap[activity]}/${bpdas}/${year}/${fileNameWithDate}`;
 
+    // Buat folder secara rekursif jika belum ada
+    const folderPath = `${bucketMap[activity]}/${bpdas}/${year}`;
+    try {
+      await webdavClient.createDirectory(folderPath, { recursive: true });
+      console.log(`Folder dibuat: ${folderPath}`);
+    } catch (dirErr) {
+      console.error(`Gagal membuat folder ${folderPath}:`, dirErr);
+    }
+
     // Unggah file ke NAS Synology menggunakan WebDAV
+    console.log(`Mengunggah file ke: ${filePath}`);
     await webdavClient.putFileContents(filePath, file.buffer, { overwrite: true });
     console.log(`File diunggah ke Synology: ${filePath}`);
 
     res.status(200).json({ message: 'Validasi berhasil dan file diunggah ke NAS Synology' });
   } catch (err) {
-    console.error('Error:', err);
+    console.error('Error saat mengunggah:', err);
     res.status(500).json({ error: `Gagal memproses shapefile: ${err.message}` });
   }
 });
