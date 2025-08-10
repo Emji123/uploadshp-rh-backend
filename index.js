@@ -1,21 +1,24 @@
+require('dotenv').config(); // Load .env di awal
+
 const express = require('express');
 const { createClient } = require('webdav');
 const JSZip = require('jszip');
 const { openDbf } = require('shapefile');
 const cors = require('cors');
 const multer = require('multer');
+
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json());
 
-// Konfigurasi WebDAV untuk NAS Synology
+// Konfigurasi WebDAV dari .env
 const webdavClient = createClient(
-  process.env.WEBDAV_URL || 'https://ditrh.synology.me:5006/shapefiles',
+  process.env.WEBDAV_URL || 'https://ditrh.synology.me:5006/',
   {
-    username: process.env.WEBDAV_USERNAME || 'webdav',
-    password: process.env.WEBDAV_PASSWORD || 'Lantai1213'
+    username: process.env.WEBDAV_USERNAME,
+    password: process.env.WEBDAV_PASSWORD
   }
 );
 
@@ -39,13 +42,32 @@ const requiredFieldsMap = {
   ]
 };
 
+// Fungsi buat folder bertingkat
+async function ensureDirectory(path) {
+  const parts = path.split('/');
+  let currentPath = '';
+  for (const part of parts) {
+    if (!part) continue;
+    currentPath += `/${part}`;
+    try {
+      const exists = await webdavClient.exists(currentPath);
+      if (!exists) {
+        console.log(`Membuat folder: ${currentPath}`);
+        await webdavClient.createDirectory(currentPath);
+      }
+    } catch (err) {
+      console.error(`Gagal membuat folder ${currentPath}:`, err.message);
+      throw err;
+    }
+  }
+}
+
+// Fungsi validasi ZIP
 async function validateZip(zipBuffer, activity) {
   try {
-    console.log(`Validasi ZIP (${activity})`);
     const zip = new JSZip();
     const content = await zip.loadAsync(zipBuffer);
     const files = Object.keys(content.files);
-    console.log('File di ZIP:', files);
 
     const shpFiles = files.filter(name => name.toLowerCase().endsWith('.shp'));
     if (shpFiles.length === 0) {
@@ -60,7 +82,6 @@ async function validateZip(zipBuffer, activity) {
     for (const shpFile of shpFiles) {
       shapefileIndex++;
       const baseName = shpFile.substring(0, shpFile.length - 4).toLowerCase();
-      console.log('Memvalidasi shapefile:', baseName);
 
       const shxFile = files.find(name => name.toLowerCase() === `${baseName}.shx`);
       const dbfFile = files.find(name => name.toLowerCase() === `${baseName}.dbf`);
@@ -72,7 +93,6 @@ async function validateZip(zipBuffer, activity) {
 
       const dbfContent = await content.file(dbfFile).async('arraybuffer');
       const source = await openDbf(dbfContent);
-      console.log('Membuka .dbf:', dbfFile);
 
       let missingFields = new Set();
       let emptyFieldsMap = new Map();
@@ -82,22 +102,11 @@ async function validateZip(zipBuffer, activity) {
       let result;
       do {
         result = await source.read();
-        console.log('Fitur:', result);
         if (result.done) break;
 
         featureCount++;
         const feature = result.value;
-        if (!feature) {
-          errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Baris ke-${featureCount} tidak valid`);
-          break;
-        }
-
         const properties = feature.properties || feature;
-        if (!properties || typeof properties !== 'object') {
-          errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Baris ke-${featureCount} tidak memiliki properti valid`);
-          break;
-        }
-        console.log('Properti fitur:', properties);
 
         for (const field of requiredFieldsMap[activity]) {
           if (!(field in properties)) {
@@ -130,7 +139,7 @@ async function validateZip(zipBuffer, activity) {
       } while (!result.done);
 
       if (featureCount === 0) {
-        errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak valid:\n    - Tidak memiliki data`);
+        errorMessages.push(`${shapefileIndex}. Shapefile ${baseName} tidak memiliki data`);
         continue;
       }
 
@@ -166,21 +175,17 @@ async function validateZip(zipBuffer, activity) {
       return { valid: true, success: 'Data sudah valid dan selesai diunggah' };
     } else {
       let combinedMessage = [];
-      if (successMessages.length > 0) {
-        combinedMessage.push(successMessages.join('\n'));
-      }
-      if (errorMessages.length > 0) {
-        combinedMessage.push(errorMessages.join('\n'));
-      }
+      if (successMessages.length > 0) combinedMessage.push(successMessages.join('\n'));
+      if (errorMessages.length > 0) combinedMessage.push(errorMessages.join('\n'));
       combinedMessage.push('Harap perbaiki shapefile dan upload ulang');
       return { valid: false, error: combinedMessage.join('\n') };
     }
   } catch (err) {
-    console.error(`Error validasi ZIP (${activity}):`, err);
-    return { valid: false, error: `Gagal memvalidasi ZIP: ${err.message}\nHarap perbaiki shapefile dan upload ulang` };
+    return { valid: false, error: `Gagal memvalidasi ZIP: ${err.message}` };
   }
 }
 
+// Endpoint upload & validasi
 app.post('/validate-shapefile', upload.single('file'), async (req, res) => {
   try {
     const { bpdas, year, activity } = req.body;
@@ -199,30 +204,22 @@ app.post('/validate-shapefile', upload.single('file'), async (req, res) => {
     const dateString = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '_').toUpperCase();
     const timeString = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace(/[:.]/g, '');
     const fileNameWithDate = `${dateString}_${timeString}_${file.originalname}`;
+
     const bucketMap = {
       'RHL Vegetatif': 'rhlvegetatif',
       'RHL UPSA': 'rhlupsa',
       'RHL FOLU': 'rhlfolu'
     };
-    const filePath = `${bucketMap[activity]}/${bpdas}/${year}/${fileNameWithDate}`;
 
-    // Buat folder secara rekursif jika belum ada
-    const folderPath = `${bucketMap[activity]}/${bpdas}/${year}`;
-    try {
-      await webdavClient.createDirectory(folderPath, { recursive: true });
-      console.log(`Folder dibuat: ${folderPath}`);
-    } catch (dirErr) {
-      console.error(`Gagal membuat folder ${folderPath}:`, dirErr);
-    }
+    const folderPath = `shapefiles/${bucketMap[activity]}/${bpdas}/${year}`;
+    await ensureDirectory(folderPath);
 
-    // Unggah file ke NAS Synology menggunakan WebDAV
+    const filePath = `${folderPath}/${fileNameWithDate}`;
     console.log(`Mengunggah file ke: ${filePath}`);
     await webdavClient.putFileContents(filePath, file.buffer, { overwrite: true });
-    console.log(`File diunggah ke Synology: ${filePath}`);
 
     res.status(200).json({ message: 'Validasi berhasil dan file diunggah ke NAS Synology' });
   } catch (err) {
-    console.error('Error saat mengunggah:', err);
     res.status(500).json({ error: `Gagal memproses shapefile: ${err.message}` });
   }
 });
