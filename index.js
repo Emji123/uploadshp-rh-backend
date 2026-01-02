@@ -30,11 +30,15 @@ const requiredFieldsMap = {
     'POLA', 'BTG_HA', 'THN_TNM', 'JNS_TNM',
     'BTG_TOTAL', 'TGL_KNTRK', 'NO_KNTRK', 'NILAI_KNTR'
   ],
+
   'RHL UPSA': [
-    'ID', 'BPDAS', 'UR_BPDAS', 'WADMPR', 'WADMKK', 'WADMKC', 'DESA',
+    'ID', 'BPDAS', 'UR_BPDAS',
+    'WADMPR', 'WADMKK', 'WADMKC', 'DESA',
     'KELOMPOK', 'THN_BUAT', 'LUAS_HA', 'JENIS_TNM',
-    'BTG_TOTAL', 'BTG_HA', 'SPL_TEKNIS', 'FUNGSI_KWS', 'KET'
+    'BTG_TOTAL', 'BTG_HA',
+    'SPL_TEKNIS', 'FUNGSI_KWS', 'KET'
   ],
+
   'RHL FOLU': [
     'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA',
     'WADMPROV', 'WADMKAB', 'WADMKEC', 'WADMDES',
