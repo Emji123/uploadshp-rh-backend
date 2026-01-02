@@ -24,9 +24,9 @@ const webdavClient = createClient(
 
 const requiredFieldsMap = {
   'RHL Vegetatif': [
-    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'PROV', 'KAB', 'KEC', 'DESA',
-    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI', 'ARAHAN',
-    'POLA', 'BTG_HA', 'THN_TNM', 'JENIS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
+    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'WADMPROV', 'WADMKAB', 'WADMKEC', 'WADMDES',
+    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI',
+    'POLA', 'BTG_HA', 'THN_TNM', 'JNS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
     'NO_KNTRK', 'NILAI_KNTR'
   ],
   'RHL UPSA': [
@@ -35,9 +35,9 @@ const requiredFieldsMap = {
     'SPL_TEKNIS', 'FUNGSI_KWS', 'KET'
   ],
   'RHL FOLU': [
-    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'PROV', 'KAB', 'KEC', 'DESA',
-    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI', 'ARAHAN',
-    'POLA', 'BTG_HA', 'THN_TNM', 'JENIS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
+    'ID_RHL', 'BPDAS', 'UR_BPDAS', 'PELAKSANA', 'WADMPROV', 'WADMKAB', 'WADMKEC', 'WADMDES',
+    'NAMA_BLOK', 'LUAS_HA', 'TIPE_KNTRK', 'PEMANGKU', 'FUNGSI',
+    'POLA', 'BTG_HA', 'THN_TNM', 'JNS_TNM', 'BTG_TOTAL', 'TGL_KNTRK',
     'NO_KNTRK', 'NILAI_KNTR'
   ]
 };
